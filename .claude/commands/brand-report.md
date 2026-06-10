@@ -77,6 +77,47 @@ Build these sections in order. Each section fills the full 1280px width.
 - All cards: 1px stroke neutral/100, 8px corner radius, white background
 - Swatch corner radius: 0 (flush within card)
 
+## Step 2 — Bind variables and styles
+
+After building the report frame, run two binding passes via the Figma Plugin API. Both passes target every descendant node of the report frame.
+
+### Pass 1 — Colour and radius variable bindings
+
+Build lookup maps from the live Figma collections:
+- **Hex → color variable**: iterate every variable in `color_primitives`. For opaque colours (alpha = 1), store a mapping from their resolved 6-digit hex value to the variable. First match wins for any duplicate hex.
+- **Radius px → border variable**: iterate `shared/radius/*` variables in `border`. Store a mapping from resolved px value to variable. Use this priority order so the first match at each value wins: `square, xs, sm, md, lg, xl, 2xl, circular`.
+
+Then traverse all nodes. For each node:
+- **Fills**: for every SOLID fill, look up its hex in the colour map. If found, replace the fill with `figma.variables.setBoundVariableForPaint(fill, 'color', variable)` and reassign `node.fills`.
+- **Strokes**: same approach as fills.
+- **Corner radius**: if `node.cornerRadius` is a uniform number (not `figma.mixed`), look it up in the radius map. If found, call `node.setBoundVariable` for all four corner fields (`topLeftRadius`, `topRightRadius`, `bottomLeftRadius`, `bottomRightRadius`).
+
+Wrap each node's operations in try/catch — skip silently on error (e.g. component instances that reject overrides).
+
+### Pass 2 — Text style bindings
+
+Get all local text styles with `figma.getLocalTextStylesAsync()`.
+
+Build a weight-category helper:
+- `bold`: style name contains "bold", "black", or "heavy"
+- `med`: style name contains "semibold", "semi bold", "medium", or "demi"
+- `reg`: everything else
+
+For each text node where both `fontSize` and `fontName` are uniform (not `figma.mixed`):
+1. Match the node's weight to a category using the helper.
+2. Filter styles to the same weight category (fallback to all styles if none match).
+3. Pick the style with the smallest `|style.fontSize − node.fontSize|` difference.
+4. Pre-load the style's font with `figma.loadFontAsync` before applying.
+5. Set `node.textStyleId = style.id`.
+
+Collect all needed fonts first and load them in parallel with `Promise.all` before the assignment loop.
+
+**Font unavailability**: if `figma.loadFontAsync` throws (commercial font not installed in the remote environment), stop and tell the designer which font family is missing. Do not substitute a different font. Wait for the designer to confirm the font has been uploaded or the styles have been updated to an available font, then retry.
+
+### Binding summary
+
+After both passes, report counts: fills bound, strokes bound, corners bound, text nodes bound, and any skipped.
+
 ## On completion
 
 Print a one-line confirmation: "Brand Report built on the Brand Report page — [N] sections, [brand name]."
